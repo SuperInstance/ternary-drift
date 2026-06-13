@@ -1,69 +1,89 @@
-# ternary-drift
+# Ternary Drift — Genetic Drift Simulation for Ternary Populations
 
-**Genetic drift for ternary populations. The math of how diversity dies.**
+**Ternary Drift** simulates Wright-Fisher genetic drift on populations where each individual carries one of three alleles {-1, 0, +1}. It provides single-generation drift steps, multi-generation simulation with fixation detection, heterozygosity tracking, effective population size estimation, and Shannon entropy analysis — all using the ternary allele model where the neutral allele (0) represents the critical "spindle" state.
 
-Genetic drift is the slow, random loss of diversity in a finite population. It's not selection — there's no fitness difference. It's just chance. In a population of 10, one allele might vanish in a few generations. In a population of 10,000, it takes thousands. The math is the same either way: random sampling, generation after generation, until one variant *fixes* and the others are gone.
+## Why It Matters
 
-This crate implements Wright-Fisher drift for ternary populations where each individual carries one of three alleles: `{-1, 0, +1}`. You provide a random number generator, we provide the dynamics.
+Genetic drift — random fluctuations in allele frequency — is the dominant evolutionary force in small populations. In ternary agent systems, drift explains how fleet diversity collapses over time even without selection pressure: neutral agents (state 0) can fixate through pure chance, causing the system to lose the {-1, +1} diversity that enables adaptation. Understanding drift rates is critical for setting fleet sizes: too few agents, and diversity is lost in O(N) generations; too many, and coordination becomes impossible. This crate provides the quantitative tools to measure, predict, and mitigate drift-induced diversity loss.
 
-## What's Inside
+## How It Works
 
-- **`drift_step(pop, rng)`** — one generation of Wright-Fisher sampling
-- **`run_drift(pop, generations, rng)`** — full simulation, returns `DriftResult`
-- **`DriftResult`** — final allele fractions, fixation generation, diversity loss
-- **`heterozygosity(pop)`** — Shannon diversity: `H = 1 - Σ(pᵢ²)`. Zero when fixed, maximal when uniform
-- **`effective_pop_size()`** — estimate Ne from entropy decay rate
-- **`fixation_probability(pop, allele)`** — probability that a specific allele takes over
-- **`time_to_fixation(pop, rng)`** — expected generations until one allele dominates
+### Wright-Fisher Model
 
-## Quick Example
+Each generation, every individual in the population independently samples a parent uniformly at random from the previous generation. This is a Moran/Wright-Fisher process:
 
-```rust
-use ternary_drift::*;
-
-// Population of 100 ternary agents: equal thirds
-let mut pop: Vec<i8> = vec![-1; 33].into_iter()
-    .chain(vec![0; 34])
-    .chain(vec![1; 33])
-    .collect();
-
-let mut rng = || { /* your RNG */ 0.5 };
-
-// Run 500 generations of drift
-let result = run_drift(&mut pop, 500, &mut rng);
-
-println!("Diversity loss: {:.1}%", result.diversity_loss * 100.0);
-println!("Fixed at generation: {:?}", result.fixation_gen);
-println!("Final fractions: -1={:.2}, 0={:.2}, +1={:.2}",
-    result.final_fracs[0], result.final_fracs[1], result.final_fracs[2]);
-
-// Heterozygosity: how diverse is the population?
-let h = heterozygosity(&pop); // 0.0 = monoculture, ~0.667 = maximum diversity
+```
+new_pop[i] = old_pop[random(0..N)]
 ```
 
-## The Insight
+for each i in 0..N. This is O(N) per generation. The key property: allele frequencies follow a random walk bounded by [0, N], and absorption (fixation) is guaranteed eventually.
 
-**Drift is inevitable in finite populations.** You can't stop it — you can only slow it down with larger populations. In ternary systems, the 0 state has a peculiar property: once the population drifts to 0-fixation, it's a *monoculture* — no variation, no adaptability, no resilience. This is why tunneling (random reactivation) matters in ternary agent systems: it's the only force that counteracts drift.
+### Heterozygosity
 
-**Use cases:**
-- **Population genetics** — model allele frequency dynamics in finite populations
-- **Evolutionary computation** — understand diversity loss in genetic algorithms
-- **Multi-agent systems** — analyze how agent diversity degrades over time
-- **Conservation biology** — estimate effective population size from genetic data
-- **Cultural evolution** — how ideas/habits fix or drift in social populations
+Heterozygosity measures genetic diversity:
 
-## See Also
+```
+H = 1 - Σ(pᵢ²)   where pᵢ = frequency of allele i
+```
 
-- **ternary-experiment** — parameter sweeps for drift experiments at scale
-- **ternary-percolation** — spatial drift on grids
-- **ternary-minority** — the minority rule that fights fixation
-- **ternary-life** — lifecycle dynamics beyond simple drift
+H = 0 when one allele is fixed; H = 2/3 when all three alleles are equally frequent (maximum diversity). Heterozygosity decreases monotonically under pure drift, with expected decrease:
 
-## Install
+```
+E[H(t+1)] = (1 - 1/N) · H(t)
+```
+
+### Effective Population Size
+
+From the entropy decay rate:
+
+```
+Ne ≈ t / (2 · |ln(H_final / H_initial)|)
+```
+
+When Ne ≪ N (census size), it indicates that population structure (variance in reproductive success) reduces the effective gene pool.
+
+### Fixation
+
+Fixation occurs when all individuals carry the same allele. The probability of ultimate fixation of any allele equals its initial frequency. Expected fixation time is O(N) generations for a neutral allele.
+
+## Quick Start
+
+```rust
+use ternary_drift::{drift_step, run_drift, heterozygosity};
+
+// Start with equal frequencies of {-1, 0, +1}
+let mut pop: Vec<i8> = (0..300).map(|i| match i % 3 { 0 => -1, 1 => 0, _ => 1 }).collect();
+
+let h0 = heterozygosity(&pop);
+let result = run_drift(&mut pop, 100, &mut rand::random);
+let h_final = heterozygosity(&pop);
+
+println!("Diversity loss: {:.1}%", (1.0 - h_final / h0) * 100.0);
+```
 
 ```bash
 cargo add ternary-drift
 ```
+
+## API
+
+| Type / Function | Description |
+|---|---|
+| `drift_step(&mut [i8], rng)` | One Wright-Fisher generation (O(N)) |
+| `run_drift(&mut [i8], gens, rng)` | Multi-gen simulation → `DriftResult` |
+| `heterozygosity(&[i8]) → f64` | Diversity measure (0 = fixed, ⅔ = uniform) |
+| `effective_pop_size(h₀, h_f, gens)` | Ne estimation from entropy decay |
+| `DriftResult` | `{ final_fracs, fixation_gen, diversity_loss }` |
+
+## Architecture Notes
+
+Drift models how **SuperInstance** fleet diversity degrades over time. Without active intervention, the η (entropy) term in γ + η = C decreases as drift fixates agents into a single state. The fleet must inject controlled diversity (γ pulses) to maintain the conservation balance. See [Architecture](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md).
+
+## References
+
+- Wright, Sewall. "Evolution in Mendelian Populations," *Genetics*, 16(2), 1931 — Wright-Fisher model.
+- Crow, James F. & Kimura, Motoo. *An Introduction to Population Genetics Theory*, Harper & Row, 1970.
+- Ewens, Warren J. *Mathematical Population Genetics*, 2nd ed., Springer, 2004.
 
 ## License
 
